@@ -1,283 +1,37 @@
 const express = require('express');
 const QRCode = require('qrcode');
-const axios = require('axios');
 
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-const SBER_API = 'https://sberpos-api.onrender.com';
-
-// Хранилище сессий
-const sessions = new Map();
-
-// ========== ЛОГИН В ТЕРМИНАЛЕ ==========
-async function loginToTerminal(terminalId, password) {
-    try {
-        const response = await axios.post(`${SBER_API}/login`, 
-            `username=${terminalId}&password=${password}`,
-            {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-            }
-        );
-        
-        const cookies = response.headers['set-cookie']?.join('; ') || '';
-        const csrfMatch = cookies.match(/csrf=([^;]+)/);
-        const csrfToken = csrfMatch ? csrfMatch[1] : null;
-        
-        return { success: true, cookies, csrfToken };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-}
-
-// ========== ОТПРАВКА ОПЛАТЫ ==========
-async function sendPayment(terminalId, password, amount, cookies, csrfToken) {
-    try {
-        const response = await axios.post(`${SBER_API}/admin/set_payload`, {
-            state: 'pay',
-            amount: String(amount),
-            content: '',
-            buttons: ':card\n:cash\n:cancel'
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': csrfToken || '',
-                'Cookie': cookies,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-        
-        return { success: response.status === 200 };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-}
-
-// ========== ЭНДПОИНТ 1: ДЛЯ ПРИЛОЖЕНИЯ ==========
+// ========== ГЕНЕРАЦИЯ QR-КОДА ==========
 app.post('/generate-qr', async (req, res) => {
     try {
-        const { trmId, amount, password } = req.body;
+        const { trmId } = req.body;
         
-        if (!trmId || !amount) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Ne hvataet parametrov: trmId i amount obyazatelny' 
+        // Проверяем, что trmId передан
+        if (!trmId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Нужно передать trmId'
             });
         }
         
-        const qrData = `https://${req.get('host')}/pay?trmId=${trmId}&amount=${amount}`;
-        const qrCodeBase64 = await QRCode.toDataURL(qrData);
+        // Ссылка на страницу оплаты sberpos-api
+        // Формат: /p/<terminal_id>
+        const paymentUrl = `https://sberpos-api.onrender.com/p/${trmId}`;
         
-        if (password) {
-            sessions.set(`${trmId}_${amount}`, { password });
-        }
+        // Генерируем QR-код
+        const qrCodeBase64 = await QRCode.toDataURL(paymentUrl);
         
+        // Возвращаем результат
         res.json({
             success: true,
             qrCode: qrCodeBase64,
-            paymentUrl: qrData
+            url: paymentUrl
         });
         
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// ========== ЭНДПОИНТ 2: СТРАНИЦА ОПЛАТЫ ==========
-app.get('/pay', (req, res) => {
-    const { trmId, amount } = req.query;
-    
-    if (!trmId || !amount) {
-        return res.status(400).send('Oshibka: ne hvataet parametrov');
-    }
-    
-    const sessionId = Date.now().toString();
-    sessions.set(sessionId, { trmId, amount, status: 'pending' });
-    
-    res.send(`
-        <!DOCTYPE html>
-        <html lang="ru">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Oplata</title>
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    min-height: 100vh;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    padding: 20px;
-                }
-                .container {
-                    max-width: 500px;
-                    width: 100%;
-                    background: white;
-                    border-radius: 30px;
-                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-                    overflow: hidden;
-                }
-                .header {
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    padding: 40px 20px;
-                    text-align: center;
-                }
-                .header h1 { font-size: 28px; margin-bottom: 10px; }
-                .content { padding: 30px; }
-                .info-card {
-                    background: #f8f9fa;
-                    border-radius: 20px;
-                    padding: 25px;
-                    margin-bottom: 30px;
-                }
-                .info-row {
-                    display: flex;
-                    justify-content: space-between;
-                    padding: 12px 0;
-                    border-bottom: 1px solid #e0e0e0;
-                }
-                .info-row:last-child { border-bottom: none; }
-                .label { font-weight: 600; color: #666; font-size: 14px; }
-                .value { font-size: 18px; font-weight: 700; color: #333; }
-                .amount-value { font-size: 32px; color: #667eea; }
-                .pay-button {
-                    width: 100%;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    border: none;
-                    padding: 18px;
-                    font-size: 18px;
-                    font-weight: 600;
-                    border-radius: 50px;
-                    cursor: pointer;
-                    transition: transform 0.2s, box-shadow 0.2s;
-                }
-                .pay-button:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(102,126,234,0.4); }
-                .pay-button:active { transform: translateY(0); }
-                .pay-button:disabled { opacity: 0.6; cursor: not-allowed; }
-                .status { margin-top: 20px; padding: 15px; border-radius: 15px; text-align: center; display: none; }
-                .status.success { background: #d4edda; color: #155724; display: block; }
-                .status.error { background: #f8d7da; color: #721c24; display: block; }
-                .status.loading { background: #e7f3ff; color: #004085; display: block; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>💰 Oplata</h1>
-                    <p>Zavershite platezh</p>
-                </div>
-                <div class="content">
-                    <div class="info-card">
-                        <div class="info-row">
-                            <span class="label">🔖 ID terminala:</span>
-                            <span class="value">${trmId}</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="label">💵 Summa k oplate:</span>
-                            <span class="value amount-value">${amount} ₽</span>
-                        </div>
-                    </div>
-                    
-                    <input type="password" id="password" placeholder="Vvedite parol terminala" style="width:100%; padding:12px; margin-bottom:15px; border:1px solid #ddd; border-radius:10px; font-size:16px;">
-                    
-                    <button class="pay-button" onclick="processPayment()">
-                        💳 Oplatit ${amount} ₽
-                    </button>
-                    
-                    <div id="status" class="status"></div>
-                </div>
-            </div>
-            
-            <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-            <script>
-                const trmId = '${trmId}';
-                const amount = '${amount}';
-                const sessionId = '${sessionId}';
-                
-                async function processPayment() {
-                    const button = document.querySelector('.pay-button');
-                    const statusDiv = document.getElementById('status');
-                    const password = document.getElementById('password').value;
-                    
-                    if (!password) {
-                        statusDiv.className = 'status error';
-                        statusDiv.innerHTML = '❌ Vvedite parol terminala';
-                        return;
-                    }
-                    
-                    button.disabled = true;
-                    statusDiv.className = 'status loading';
-                    statusDiv.innerHTML = '🔄 Otpravka zaprosa v terminal...';
-                    
-                    try {
-                        const response = await axios.post('/api/pay', {
-                            trmId: trmId,
-                            amount: amount,
-                            password: password,
-                            sessionId: sessionId
-                        });
-                        
-                        if (response.data.success) {
-                            statusDiv.className = 'status success';
-                            statusDiv.innerHTML = '✅ Oplata uspeshno otpravlena! Zhdite podtverzhdeniya na terminale.';
-                        } else {
-                            statusDiv.className = 'status error';
-                            statusDiv.innerHTML = '❌ ' + (response.data.error || 'Oshibka pri oplate');
-                            button.disabled = false;
-                        }
-                    } catch (error) {
-                        statusDiv.className = 'status error';
-                        statusDiv.innerHTML = '❌ Oshibka: ' + (error.response?.data?.error || error.message);
-                        button.disabled = false;
-                    }
-                }
-            </script>
-        </body>
-        </html>
-    `);
-});
-
-// ========== ЭНДПОИНТ 3: ОБРАБОТКА ОПЛАТЫ ==========
-app.post('/api/pay', async (req, res) => {
-    const { trmId, amount, password, sessionId } = req.body;
-    
-    try {
-        const loginResult = await loginToTerminal(trmId, password);
-        
-        if (!loginResult.success) {
-            return res.status(401).json({
-                success: false,
-                error: 'Ne udalos avtorizovatsya v terminale. Proverte ID i parol.'
-            });
-        }
-        
-        const paymentResult = await sendPayment(
-            trmId, password, amount, 
-            loginResult.cookies, 
-            loginResult.csrfToken
-        );
-        
-        if (paymentResult.success) {
-            if (sessions.has(sessionId)) {
-                sessions.set(sessionId, { ...sessions.get(sessionId), status: 'paid' });
-            }
-            
-            res.json({
-                success: true,
-                message: 'Oplata ' + amount + '₽ otpravlena na terminal ' + trmId
-            });
-        } else {
-            throw new Error(paymentResult.error || 'Oshibka pri otpravke oplaty');
-        }
-        
-    } catch (error) {
-        console.error('Payment error:', error.message);
         res.status(500).json({
             success: false,
             error: error.message
@@ -285,14 +39,108 @@ app.post('/api/pay', async (req, res) => {
     }
 });
 
-// ========== ЗДОРОВЬЕ ==========
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', sessions: sessions.size });
+// ========== ПРОВЕРКА СТАТУСА ТЕРМИНАЛА (опционально) ==========
+app.get('/status/:trmId', async (req, res) => {
+    try {
+        const { trmId } = req.params;
+        
+        // Здесь можно запросить статус у sberpos-api
+        // Но для простоты пока возвращаем ссылку на страницу статуса
+        res.json({
+            success: true,
+            statusUrl: `https://sberpos-api.onrender.com/admin/status`,
+            terminalId: trmId,
+            note: 'Полный статус смотри в админке sberpos-api'
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
+// ========== ГЛАВНАЯ СТРАНИЦА ==========
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>QR Generator</title>
+            <meta charset="UTF-8">
+            <style>
+                body {
+                    font-family: system-ui, sans-serif;
+                    max-width: 800px;
+                    margin: 50px auto;
+                    padding: 20px;
+                    background: #f5f5f5;
+                }
+                .container {
+                    background: white;
+                    border-radius: 20px;
+                    padding: 40px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }
+                h1 { color: #667eea; margin-bottom: 10px; }
+                pre {
+                    background: #2d2d2d;
+                    color: #f8f8f2;
+                    padding: 15px;
+                    border-radius: 10px;
+                    overflow-x: auto;
+                }
+                code {
+                    background: #eee;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                }
+                .endpoint {
+                    background: #e7f3ff;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin: 20px 0;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>💰 QR Generator for SberPos</h1>
+                <p>Простой сервер для генерации QR-кодов</p>
+                
+                <div class="endpoint">
+                    <strong>POST /generate-qr</strong>
+                    <p>Тело запроса:</p>
+                    <pre>
+{
+  "trmId": "TRM-0000"
+}</pre>
+                    <p>Ответ:</p>
+                    <pre>
+{
+  "success": true,
+  "qrCode": "data:image/png;base64,...",
+  "url": "https://sberpos-api.onrender.com/p/TRM-0000"
+}</pre>
+                </div>
+                
+                <p>После скана QR пользователь попадает на страницу оплаты SberPos, где уже отображается сумма и статус.</p>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+// ========== ПРОВЕРКА ЗДОРОВЬЯ ==========
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok' });
+});
+
+// ========== ЗАПУСК ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server zapushen na portu ${PORT}`);
-    console.log(`QR generator: POST /generate-qr`);
-    console.log(`Stranica oplaty: GET /pay`);
+    console.log(`✅ Сервер запущен на порту ${PORT}`);
+    console.log(`📱 POST /generate-qr - генерация QR`);
+    console.log(`🏠 GET / - главная страница`);
 });
