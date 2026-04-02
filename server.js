@@ -21,7 +21,6 @@ async function loginToTerminal(terminalId, password) {
             }
         );
         
-        // Получаем cookies и CSRF токен
         const cookies = response.headers['set-cookie']?.join('; ') || '';
         const csrfMatch = cookies.match(/csrf=([^;]+)/);
         const csrfToken = csrfMatch ? csrfMatch[1] : null;
@@ -63,17 +62,13 @@ app.post('/generate-qr', async (req, res) => {
         if (!trmId || !amount) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'Не хватает параметров: trmId и amount обязательны' 
+                error: 'Ne hvataet parametrov: trmId i amount obyazatelny' 
             });
         }
         
-        // Формируем ссылку для QR-кода (пароль не передаём в URL!)
         const qrData = `https://${req.get('host')}/pay?trmId=${trmId}&amount=${amount}`;
-        
-        // Генерируем QR-код
         const qrCodeBase64 = await QRCode.toDataURL(qrData);
         
-        // Сохраняем пароль в сессии (если передан)
         if (password) {
             sessions.set(`${trmId}_${amount}`, { password });
         }
@@ -94,10 +89,9 @@ app.get('/pay', (req, res) => {
     const { trmId, amount } = req.query;
     
     if (!trmId || !amount) {
-        return res.status(400).send('Ошибка: не хватает параметров');
+        return res.status(400).send('Oshibka: ne hvataet parametrov');
     }
     
-    // Генерируем уникальный ID сессии
     const sessionId = Date.now().toString();
     sessions.set(sessionId, { trmId, amount, status: 'pending' });
     
@@ -107,7 +101,7 @@ app.get('/pay', (req, res) => {
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Оплата</title>
+            <title>Oplata</title>
             <style>
                 * { margin: 0; padding: 0; box-sizing: border-box; }
                 body {
@@ -175,25 +169,25 @@ app.get('/pay', (req, res) => {
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>💰 Оплата</h1>
-                    <p>Завершите платеж</p>
+                    <h1>💰 Oplata</h1>
+                    <p>Zavershite platezh</p>
                 </div>
                 <div class="content">
                     <div class="info-card">
                         <div class="info-row">
-                            <span class="label">🔖 ID терминала:</span>
+                            <span class="label">🔖 ID terminala:</span>
                             <span class="value">${trmId}</span>
                         </div>
                         <div class="info-row">
-                            <span class="label">💵 Сумма к оплате:</span>
+                            <span class="label">💵 Summa k oplate:</span>
                             <span class="value amount-value">${amount} ₽</span>
                         </div>
                     </div>
                     
-                    <input type="password" id="password" placeholder="Введите пароль терминала" style="width:100%; padding:12px; margin-bottom:15px; border:1px solid #ddd; border-radius:10px; font-size:16px;">
+                    <input type="password" id="password" placeholder="Vvedite parol terminala" style="width:100%; padding:12px; margin-bottom:15px; border:1px solid #ddd; border-radius:10px; font-size:16px;">
                     
                     <button class="pay-button" onclick="processPayment()">
-                        💳 Оплатить ${amount} ₽
+                        💳 Oplatit ${amount} ₽
                     </button>
                     
                     <div id="status" class="status"></div>
@@ -213,13 +207,13 @@ app.get('/pay', (req, res) => {
                     
                     if (!password) {
                         statusDiv.className = 'status error';
-                        statusDiv.innerHTML = '❌ Введите пароль терминала';
+                        statusDiv.innerHTML = '❌ Vvedite parol terminala';
                         return;
                     }
                     
                     button.disabled = true;
                     statusDiv.className = 'status loading';
-                    statusDiv.innerHTML = '🔄 Отправка запроса в терминал...';
+                    statusDiv.innerHTML = '🔄 Otpravka zaprosa v terminal...';
                     
                     try {
                         const response = await axios.post('/api/pay', {
@@ -231,15 +225,15 @@ app.get('/pay', (req, res) => {
                         
                         if (response.data.success) {
                             statusDiv.className = 'status success';
-                            statusDiv.innerHTML = '✅ Оплата успешно отправлена! Ждите подтверждения на терминале.';
+                            statusDiv.innerHTML = '✅ Oplata uspeshno otpravlena! Zhdite podtverzhdeniya na terminale.';
                         } else {
                             statusDiv.className = 'status error';
-                            statusDiv.innerHTML = '❌ ' + (response.data.error || 'Ошибка при оплате');
+                            statusDiv.innerHTML = '❌ ' + (response.data.error || 'Oshibka pri oplate');
                             button.disabled = false;
                         }
                     } catch (error) {
                         statusDiv.className = 'status error';
-                        statusDiv.innerHTML = '❌ Ошибка: ' + (error.response?.data?.error || error.message);
+                        statusDiv.innerHTML = '❌ Oshibka: ' + (error.response?.data?.error || error.message);
                         button.disabled = false;
                     }
                 }
@@ -254,17 +248,15 @@ app.post('/api/pay', async (req, res) => {
     const { trmId, amount, password, sessionId } = req.body;
     
     try {
-        // Логинимся в терминале
         const loginResult = await loginToTerminal(trmId, password);
         
         if (!loginResult.success) {
             return res.status(401).json({
                 success: false,
-                error: 'Не удалось авторизоваться в терминале. Проверьте ID и пароль.'
+                error: 'Ne udalos avtorizovatsya v terminale. Proverte ID i parol.'
             });
         }
         
-        // Отправляем оплату
         const paymentResult = await sendPayment(
             trmId, password, amount, 
             loginResult.cookies, 
@@ -278,10 +270,10 @@ app.post('/api/pay', async (req, res) => {
             
             res.json({
                 success: true,
-                message: \`Оплата \${amount}₽ отправлена на терминал \${trmId}\`
+                message: 'Oplata ' + amount + '₽ otpravlena na terminal ' + trmId
             });
         } else {
-            throw new Error(paymentResult.error || 'Ошибка при отправке оплаты');
+            throw new Error(paymentResult.error || 'Oshibka pri otpravke oplaty');
         }
         
     } catch (error) {
@@ -300,7 +292,7 @@ app.get('/health', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Сервер запущен на порту ${PORT}`);
-    console.log(`📱 QR генератор: POST /generate-qr`);
-    console.log(`💳 Страница оплаты: GET /pay`);
+    console.log(`Server zapushen na portu ${PORT}`);
+    console.log(`QR generator: POST /generate-qr`);
+    console.log(`Stranica oplaty: GET /pay`);
 });
